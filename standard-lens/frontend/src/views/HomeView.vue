@@ -180,7 +180,7 @@ onMounted(() => {
           <Sparkles class="h-4 w-4" />
           <span class="hidden sm:inline">AI 设置</span>
         </RouterLink>
-        <Badge variant="outline" class="bg-background/70 text-[11px] backdrop-blur">Phase 6</Badge>
+        <Badge variant="outline" class="bg-background/70 text-[11px] backdrop-blur">Phase 7</Badge>
       </div>
     </header>
 

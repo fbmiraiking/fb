@@ -16,7 +16,7 @@ from app.models.standard import Standard, StandardStatus
 
 # Higher-priority relation types win when one standard has multiple relations
 # with the same category.
-_RELATION_PRIORITY: dict[StandardProductRelationType, int] = {
+RELATION_PRIORITY: dict[StandardProductRelationType, int] = {
     StandardProductRelationType.DIRECT_APPLICABLE: 0,
     StandardProductRelationType.SAFETY: 1,
     StandardProductRelationType.MATERIAL: 2,
@@ -47,11 +47,11 @@ def _escape_like(value: str) -> str:
     return value.replace("!", "!!").replace("%", "!%").replace("_", "!_")
 
 
-def _relation_rank(relation: StandardProductRelation) -> tuple[int, Decimal, int]:
+def relation_rank(relation: StandardProductRelation) -> tuple[int, Decimal, int]:
     confidence = (
         relation.confidence if relation.confidence is not None else Decimal("-1")
     )
-    return (_RELATION_PRIORITY[relation.relation_type], -confidence, relation.id)
+    return (RELATION_PRIORITY[relation.relation_type], -confidence, relation.id)
 
 
 def _entry_sort_key(entry: ProductStandardEntry) -> tuple[date, int, int]:
@@ -149,7 +149,7 @@ def get_product_standards(
     best: dict[int, ProductStandardEntry] = {}
     for standard, relation in rows:
         existing = best.get(standard.id)
-        if existing is None or _relation_rank(relation) < _relation_rank(existing.relation):
+        if existing is None or relation_rank(relation) < relation_rank(existing.relation):
             best[standard.id] = ProductStandardEntry(standard=standard, relation=relation)
 
     groups: dict[str, list[ProductStandardEntry]] = {

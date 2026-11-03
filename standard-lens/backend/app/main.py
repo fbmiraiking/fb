@@ -58,7 +58,7 @@ async def lifespan(_: FastAPI):
 app = FastAPI(
     title=settings.app_name,
     version=settings.app_version,
-    description="Standard Lens API - standards, versions, sync, products, AI settings and vision (Phase 6)",
+    description="Standard Lens API - standards, versions, sync, products, AI settings, vision and standard matching (Phase 7)",
     lifespan=lifespan,
     docs_url="/docs",
     redoc_url=None,

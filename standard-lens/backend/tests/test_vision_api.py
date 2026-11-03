@@ -8,7 +8,7 @@ from PIL import Image
 
 from app.ai.base import AIProviderError
 from app.ai.types import VisionAnalysisResult
-from app.api.routes import vision as vision_routes
+from app.vision import service as vision_service
 from app.vision.image import MAX_IMAGE_BYTES
 
 SECRET = "sk-vision-super-secret-789"
@@ -97,7 +97,7 @@ def test_vision_analyze_returns_structured_json_and_compresses_image(
 ) -> None:
     fake = FakeProvider(text=json.dumps(PAYLOAD, ensure_ascii=False))
     monkeypatch.setattr(
-        vision_routes,
+        vision_service,
         "get_vision_provider",
         lambda provider: fake,
     )
@@ -142,7 +142,7 @@ def test_vision_analyze_rejects_oversized_image(
 ) -> None:
     fake = FakeProvider(text=json.dumps(PAYLOAD))
     monkeypatch.setattr(
-        vision_routes,
+        vision_service,
         "get_vision_provider",
         lambda provider: fake,
     )
@@ -164,7 +164,7 @@ def test_vision_analyze_rejects_unsupported_format(
 ) -> None:
     fake = FakeProvider(text=json.dumps(PAYLOAD))
     monkeypatch.setattr(
-        vision_routes,
+        vision_service,
         "get_vision_provider",
         lambda provider: fake,
     )
@@ -196,7 +196,7 @@ def test_vision_analyze_provider_error_is_redacted(
 ) -> None:
     fake = FakeProvider(error=AIProviderError(f"boom {SECRET}"))
     monkeypatch.setattr(
-        vision_routes,
+        vision_service,
         "get_vision_provider",
         lambda provider: fake,
     )
@@ -216,7 +216,7 @@ def test_vision_analyze_invalid_model_json_returns_502(
 ) -> None:
     fake = FakeProvider(text="not a json object")
     monkeypatch.setattr(
-        vision_routes,
+        vision_service,
         "get_vision_provider",
         lambda provider: fake,
     )

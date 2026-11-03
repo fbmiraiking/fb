@@ -19,7 +19,7 @@ class Settings(BaseSettings):
 
     # Application
     app_name: str = "Standard Lens API"
-    app_version: str = "0.7.0"
+    app_version: str = "0.8.0"
     app_env: str = "development"
     debug: bool = True
     api_prefix: str = "/api"

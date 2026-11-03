@@ -263,7 +263,7 @@ Phase 0 创建 `app_meta` 表，用于验证 ORM + 迁移链路；Phase 1 新增
 - Anthropic：Messages API + base64 image block；根路径 Base URL 自动补 `/v1`，同时发送 `x-api-key` 与 Bearer 认证头
 - Gemini：generateContent + inline_data
 
-图片识别接口 `POST /api/v1/vision/analyze` 已实现；前端图片上传与结果展示页面尚未实现。OpenAI/Gemini 使用 models 接口测试连接；Anthropic 使用最小 Messages 请求，并兼容根路径 Base URL 与 Bearer Token 网关。
+图片识别接口 `POST /api/v1/vision/analyze` 与识别结果匹配接口 `POST /api/v1/vision/analyze-and-match` 已实现；前端图片上传与结果展示页面尚未实现。OpenAI/Gemini 使用 models 接口测试连接；Anthropic 使用最小 Messages 请求，并兼容根路径 Base URL 与 Bearer Token 网关。
 
 ### 安全处理
 
@@ -307,6 +307,46 @@ Phase 0 创建 `app_meta` 表，用于验证 ORM + 迁移链路；Phase 1 新增
 
 Prompt 明确禁止根据商品知识推测标准号；解析层的交叉校验是第二道防线。其他标签信息放在 `visibleText`。
 
+## 识别结果匹配
+
+`POST /api/v1/vision/analyze-and-match` 复用图片读取、压缩、AI 调用与 JSON 解析，然后把结构化结果交给 `app/services/vision_match_service.py`。图片仍然只在内存中处理，`imageStored=false`，匹配过程不写数据库。
+
+### 图片标准号
+
+1. 对 `visibleStandardNumbers` 逐项调用 `StandardNoNormalizer.try_normalize`
+2. 按规范化后的 `normalized_no` 精确查询 `standard`；不做模糊匹配，不根据相似编号补全
+3. 数据库中没有的编号只进入 `unmatchedVisibleStandardNumbers`，不生成标准条目
+4. 每个命中标准附带 `statusLabel`、`isHistorical`、直接替代标准（`replacedBy`）、版本链中的现行标准（`latestCurrent`）和中文 `notice`
+
+`REPLACED` / `ABOLISHED` 标准的提示包含：图片上的标准、当前状态、当年实施日期、当前替代标准、当前最新现行标准。替代标准来自 `standard_relation` 的 `REPLACES` / `REPLACED_BY`；最新现行标准来自 `get_version_chain` 返回的版本链，不按年份推断。
+
+### 商品分类匹配
+
+`product_category.name` 和 `product_alias.alias` 参与匹配，分析侧文本权重：
+
+- 商品名称、AI 类别判断：5
+- 材质、用途：2
+
+规范化后先做完全相等匹配（1.0），再做双向包含匹配（0.6）；按累计得分排序，最多取 5 个分类。返回 `matchedCategories` 与命中的词，便于排查误匹配。
+
+### 商品相关标准
+
+通过 `standard_product_relation` 查询匹配分类下的标准：
+
+- 排除 `review_status=REJECTED`
+- 同一标准命中多个分类/关系时，按 `RELATION_PRIORITY` 与置信度保留优先级最高的一条
+- `POSSIBLE` 关联、`UNKNOWN` 状态标准进入 `other`
+- `ACTIVE` -> `current`，`UPCOMING` -> `upcoming`，`REPLACED` / `ABOLISHED` -> `historical`
+- 排序：`current`、`historical`、`other` 按 `effectiveDate` 从新到旧；`upcoming` 从近到远
+
+响应模型在 `app/schemas/vision_match.py`，所有标准条目统一包含 `standardNo`、`standardName`、`status`、`statusLabel`、`publishDate`、`effectiveDate`、`expiryDate`、`relationType`、`isHistorical`。`relationType` 区分 `DETECTED`、`REPLACES`、`LATEST_CURRENT` 与商品关联类型。
+
+### 错误处理
+
+- 图片与 AI 阶段沿用 `/vision/analyze` 的 413 / 415 / 422 / 502
+- 标准库查询失败返回 503；匹配过程异常返回 500，均不返回 SQL 或内部堆栈
+- 响应和日志都不包含 API Key；`UploadFile` 在 `app/vision/service.py` 的 finally 中关闭
+
 ## 前端结构
 
 | 目录 | 职责 |
@@ -339,8 +379,8 @@ Prompt 明确禁止根据商品知识推测标准号；解析层的交叉校验�
 | Phase 4 | 商品分类、别名、标准关联、商品搜索/分组标准 API、前端商品搜索页 | 已完成 |
 | Phase 5 | 用户 AI 配置、Provider 适配器、连接测试、AI 设置页 | 已完成 |
 | Phase 6 | 图片识别接口、图片压缩/内存处理、结构化 JSON、标准号防猜测 | 已完成（前端上传页未开放） |
+| Phase 7 | 图片标准号精确匹配、商品分类匹配、商品相关标准分组、旧标准替代链提示 | 已完成（前端结果页未开放） |
 | 后续 | 前端标准检索页、AI 图片上传/结果页、关联审核管理、同步任务管理页、全文检索 | 未开始 |
-| 后续 | AI 识别结果与标准库比对 | 未开始 |
 | 后续 | 历史记录、收藏、权限与运维增强 | 未开始 |
 
 后续阶段新增业务表时，从 `app/models/` 和 Alembic 迁移开始，而不是直接改数据库。

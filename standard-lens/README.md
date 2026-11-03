@@ -2,7 +2,7 @@
 
 商品标准查询与 AI 图片识别 Web 应用。
 
-当前仓库完成 **Phase 0：项目骨架**、**Phase 1：标准基础数据模型和查询 API**、**Phase 2：标准版本关系、版本链 API 和前端详情页**、**Phase 3：标准数据同步模块**、**Phase 4：商品分类与标准关联**、**Phase 5：用户自备 AI Key 与 Provider 接口**，以及 **Phase 6：图片识别接口**。
+当前仓库完成 **Phase 0：项目骨架**、**Phase 1：标准基础数据模型和查询 API**、**Phase 2：标准版本关系、版本链 API 和前端详情页**、**Phase 3：标准数据同步模块**、**Phase 4：商品分类与标准关联**、**Phase 5：用户自备 AI Key 与 Provider 接口**、**Phase 6：图片识别接口**，以及 **Phase 7：识别结果与标准库、商品分类匹配**。
 
 ## 当前范围
 
@@ -22,8 +22,9 @@
 - Phase 4：`product_category` / `product_alias` / `standard_product_relation`、商品搜索与分组标准 API、前端商品搜索页
 - Phase 5：用户自备 AI Provider 配置、sessionStorage/localStorage 本地保存、测试连接接口、统一 `VisionProvider` 与四类适配器
 - Phase 6：`POST /api/v1/vision/analyze` 图片识别、10MB/JPEG/PNG/WebP 限制、2048px 内存压缩、严格 JSON 解析与标准号防猜测校验
+- Phase 7：`POST /api/v1/vision/analyze-and-match` 识别结果与标准库/商品分类匹配、旧标准替代链提示、按状态分组排序
 
-**当前未实现**：前端标准检索页、AI 图片上传/结果展示页面（后端识别接口已完成）。商品和标准关联数据目前通过 SQL/后续管理端维护。
+**当前未实现**：前端标准检索页、AI 图片上传/结果展示页面（后端识别与标准库匹配接口已完成）。商品和标准关联数据目前通过 SQL/后续管理端维护。
 
 ## 技术栈
 
@@ -32,7 +33,7 @@
 | 前端 | Vue 3、TypeScript、Vite、Vue Router、Pinia、Tailwind CSS、shadcn-vue |
 | 后端 | Python 3.12+、FastAPI、Pydantic 2、SQLAlchemy 2、Alembic、APScheduler |
 | 数据库 | MySQL 8（utf8mb4） |
-| 抓取/图片 | httpx、BeautifulSoup（已用于同步）；Pillow 暂未使用 |
+| 抓取/图片 | httpx、BeautifulSoup（同步）；Pillow（图片校验与内存压缩） |
 | 部署 | Nginx（+ 可选 systemd） |
 | PWA | vite-plugin-pwa（Workbox） |
 
@@ -46,7 +47,7 @@ standard-lens/
       api/routes/standards.py  # GET /api/v1/standards/...
       api/routes/products.py   # GET /api/v1/products/...
       api/routes/ai.py         # POST /api/v1/ai/test-connection
-      api/routes/vision.py     # POST /api/v1/vision/analyze
+      api/routes/vision.py     # POST /api/v1/vision/analyze、analyze-and-match
       api/routes/admin.py      # POST /api/admin/sync/standards
       api/deps.py              # 管理员令牌校验
       core/config.py           # .env 配置
@@ -59,6 +60,7 @@ standard-lens/
       ai/anthropic.py          # Anthropic
       vision/image.py          # 图片大小/格式校验、EXIF 方向、2048px 压缩
       vision/parser.py         # JSON 提取、结构校验、可见标准号交叉校验
+      vision/service.py        # 上传读取、图片处理、AI 调用与 JSON 解析编排
       models/app_meta.py       # 基础设施表
       models/standard.py       # standard 表与状态枚举
       models/standard_relation.py  # 标准版本/关联关系
@@ -68,9 +70,11 @@ standard-lens/
       schemas/product.py       # 商品 API 响应模型
       schemas/ai.py            # AI API 响应模型
       schemas/vision.py        # 图片识别结构化响应模型
+      schemas/vision_match.py  # 识别结果与标准库匹配响应模型
       schemas/sync.py          # 同步 API 响应模型
       services/standard_service.py
       services/product_service.py
+      services/vision_match_service.py  # 标准号/商品分类匹配、旧标准提示、分组排序
       sync/base.py             # StandardDataSource 接口与 DTO
       sync/std_samr.py         # std.samr.gov.cn 适配器
       sync/upsert.py           # 标准/关系 upsert
@@ -300,7 +304,7 @@ npm run dev
 {
   "status": "ok",
   "service": "Standard Lens API",
-  "version": "0.7.0",
+  "version": "0.8.0",
   "environment": "development",
   "database": {
     "status": "ok",
@@ -697,6 +701,113 @@ curl --get --data-urlencode "q=食品接触" "http://127.0.0.1:8000/api/v1/stand
 - 415：不是 JPEG/PNG/WebP，或图片损坏、HEIC
 - 422：表单或 AI 配置校验失败（不回显 Key）
 - 502：Provider 调用失败或模型没有返回合法 JSON
+
+### `POST /api/v1/vision/analyze-and-match`
+
+识别图片，并把识别结果与数据库中的标准、商品分类关联起来。表单字段与 `/vision/analyze` 完全相同，额外需要数据库连接。图片处理、AI 配置和日志规则也相同：不保存图片、不写 Key。
+
+处理顺序：
+
+1. 调用 AI 得到 `product`、`materials`、`usages`、`visibleStandardNumbers`
+2. 对每个可见标准号做 `StandardNoNormalizer` 规范化，再按 `normalized_no` 精确查询 `standard` 表
+3. 用商品名称、类别、材质、用途匹配 `product_category` 与 `product_alias`（最多 5 个分类）
+4. 通过 `standard_product_relation` 查询匹配分类关联的标准，按状态分组
+5. 查询检测标准的替代关系与版本链，生成旧标准提示
+
+返回结构：
+
+```json
+{
+  "imageAnalysis": {
+    "product": {
+      "name": "婴儿塑料奶瓶",
+      "categoryGuess": "婴儿奶瓶",
+      "confidence": 0.95
+    },
+    "materials": ["PP", "硅胶"],
+    "usages": ["婴儿喂养"],
+    "visibleText": ["GB 1000-2018", "生产日期 2024-05-01"],
+    "visibleStandardNumbers": ["GB 1000-2018"],
+    "productionDate": "2024-05-01",
+    "manufacturer": "示例公司"
+  },
+  "detectedStandards": [
+    {
+      "id": 12,
+      "standardNo": "GB 1000-2018",
+      "standardName": "旧版塑料奶瓶标准",
+      "status": "REPLACED",
+      "statusLabel": "旧标准",
+      "publishDate": "2018-01-01",
+      "effectiveDate": "2018-07-01",
+      "expiryDate": "2024-04-30",
+      "relationType": "DETECTED",
+      "isHistorical": true,
+      "replacedBy": [
+        {
+          "id": 13,
+          "standardNo": "GB 1000-2024",
+          "standardName": "现行塑料奶瓶标准",
+          "status": "ACTIVE",
+          "statusLabel": "当前现行",
+          "publishDate": "2024-01-01",
+          "effectiveDate": "2024-05-01",
+          "expiryDate": null,
+          "relationType": "REPLACES",
+          "isHistorical": false
+        }
+      ],
+      "latestCurrent": [
+        {
+          "id": 13,
+          "standardNo": "GB 1000-2024",
+          "standardName": "现行塑料奶瓶标准",
+          "status": "ACTIVE",
+          "statusLabel": "当前现行",
+          "publishDate": "2024-01-01",
+          "effectiveDate": "2024-05-01",
+          "expiryDate": null,
+          "relationType": "LATEST_CURRENT",
+          "isHistorical": false
+        }
+      ],
+      "notice": "图片上的标准 GB 1000-2018 是旧标准，实施于 2018-07-01；当前替代标准：GB 1000-2024（当前现行）；当前最新现行标准：GB 1000-2024（当前现行）。"
+    }
+  ],
+  "relatedStandards": {
+    "current": [],
+    "upcoming": [],
+    "historical": [],
+    "other": []
+  },
+  "imageStored": false,
+  "matchedCategories": [
+    {
+      "id": 3,
+      "name": "奶瓶",
+      "description": null,
+      "parentId": null,
+      "aliases": ["婴儿奶瓶"],
+      "score": 8.0,
+      "matchedTerms": ["婴儿塑料奶瓶", "婴儿奶瓶"]
+    }
+  ],
+  "unmatchedVisibleStandardNumbers": []
+}
+```
+
+字段与规则：
+
+- `detectedStandards`：图片中明确出现、且能在标准库中精确找到的标准；`relationType` 固定为 `DETECTED`
+- 每个标准条目都包含 `standardNo`、`standardName`、`status`、`statusLabel`、`publishDate`、`effectiveDate`、`expiryDate`、`relationType`、`isHistorical`
+- `replacedBy`：数据库中直接替代该标准的标准；`latestCurrent`：该标准版本链中的现行标准
+- 旧标准（`REPLACED`）和已废止标准（`ABOLISHED`）的 `notice` 会说明图片上的标准、当前状态、当年实施日期、当前替代标准、当前最新现行标准
+- `relatedStandards.current` 按 `effectiveDate` 从新到旧；`upcoming` 从近到远；`historical` 从新到旧；`other` 包含 `POSSIBLE` 关联或状态未知的标准
+- `relationType`：`DETECTED` / `REPLACES` / `LATEST_CURRENT`，商品关联时为 `DIRECT_APPLICABLE`、`MATERIAL`、`SAFETY` 等
+- `unmatchedVisibleStandardNumbers`：AI 看到但数据库没有的标准号；它们**不会**被补全或生成标准条目
+- 所有最终标准都来自数据库；AI 只负责从图片提取文本，不生成标准编号
+- `imageStored` 固定为 `false`
+- 503：标准库查询失败；500：识别成功但匹配过程失败
 
 ### `POST /api/admin/sync/standards`（管理员）
 
