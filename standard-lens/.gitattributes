@@ -1,0 +1,9 @@
+# Batch scripts must keep CRLF so cmd.exe parses them correctly.
+*.bat text eol=crlf
+
+# Keep the rest platform-neutral.
+*.py text eol=lf
+*.ts text eol=lf
+*.vue text eol=lf
+*.sql text eol=lf
+*.conf text eol=lf
