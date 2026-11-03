@@ -2,8 +2,13 @@ from datetime import date
 
 from pydantic import BaseModel, ConfigDict, Field
 
+from app.models.requirement import RequirementType
 from app.models.standard import StandardStatus
 from app.schemas.vision import VisionAnalysisResponse
+from app.services.requirement_verification_service import (
+    VERIFICATION_DISCLAIMER,
+    RequirementCheckStatus,
+)
 
 
 class StandardMatchItem(BaseModel):
@@ -53,6 +58,45 @@ class MatchedCategoryItem(BaseModel):
     )
 
 
+class RequirementCheckItem(BaseModel):
+    requirement_id: int = Field(serialization_alias="requirementId")
+    chapter: str
+    requirement_type: RequirementType = Field(
+        serialization_alias="requirementType"
+    )
+    requirement_text: str = Field(serialization_alias="requirementText")
+    verification_method: str = Field(serialization_alias="verificationMethod")
+    status: RequirementCheckStatus
+    status_label: str = Field(serialization_alias="statusLabel")
+    image_checkable: bool = Field(serialization_alias="imageCheckable")
+    evidence: list[str]
+    message: str
+
+
+class StandardVerificationItem(BaseModel):
+    standard_id: int = Field(serialization_alias="standardId")
+    standard_no: str = Field(serialization_alias="standardNo")
+    standard_name: str = Field(serialization_alias="standardName")
+    status: StandardStatus
+    status_label: str = Field(serialization_alias="statusLabel")
+    effective_date: date | None = Field(default=None, serialization_alias="effectiveDate")
+    replacement_standards: list[StandardMatchItem] = Field(
+        default_factory=list,
+        serialization_alias="replacementStandards",
+    )
+    latest_current: list[StandardMatchItem] = Field(
+        default_factory=list,
+        serialization_alias="latestCurrent",
+    )
+    lifecycle_notice: str = Field(serialization_alias="lifecycleNotice")
+    requirements: list[RequirementCheckItem]
+    observed_count: int = Field(serialization_alias="observedCount")
+    partial_count: int = Field(serialization_alias="partialCount")
+    not_observed_count: int = Field(serialization_alias="notObservedCount")
+    external_check_count: int = Field(serialization_alias="externalCheckCount")
+    summary: str
+
+
 class VisionMatchResponse(BaseModel):
     image_analysis: VisionAnalysisResponse = Field(serialization_alias="imageAnalysis")
     detected_standards: list[DetectedStandardItem] = Field(
@@ -69,4 +113,12 @@ class VisionMatchResponse(BaseModel):
     unmatched_visible_standard_numbers: list[str] = Field(
         default_factory=list,
         serialization_alias="unmatchedVisibleStandardNumbers",
+    )
+    standard_verification: list[StandardVerificationItem] = Field(
+        default_factory=list,
+        serialization_alias="standardVerification",
+    )
+    verification_notice: str = Field(
+        default=VERIFICATION_DISCLAIMER,
+        serialization_alias="verificationNotice",
     )

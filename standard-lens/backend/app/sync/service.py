@@ -28,6 +28,10 @@ logger = logging.getLogger(__name__)
 # in-process scheduler is enabled; see README/deployment notes.
 _task_lock = threading.Lock()
 
+# Catalog-only imports upsert tens of thousands of rows. Committing once per
+# row is the bottleneck, so batch the commits while keeping progress visible.
+CATALOG_COMMIT_BATCH_SIZE = 200
+
 _SOURCE_CLASSES: dict[str, type[StandardDataSource]] = {
     StdSamrDataSource.SOURCE_NAME: StdSamrDataSource,
 }
@@ -270,8 +274,15 @@ def execute_sync(
     *,
     settings: Settings | None = None,
     max_items: int | None = None,
+    include_details: bool = True,
 ) -> SyncTask:
-    """Execute one task synchronously and update its persistent log."""
+    """Execute one task synchronously and update its persistent log.
+
+    ``include_details=False`` performs a catalog-only sync from list rows. It is
+    intended for the initial bulk import of tens of thousands of standards,
+    where fetching every detail page would take many hours. Existing rows keep
+    their detail fields because the upsert preserves optional columns.
+    """
     settings = settings or get_settings()
     limit = settings.sync_max_items_per_run if max_items is None else max_items
     limit = max(0, int(limit))
@@ -310,19 +321,21 @@ def execute_sync(
             detail: StandardDetailData | None = None
             item_failed = False
 
-            try:
-                detail = source.fetch_detail(item)
-            except Exception as exc:  # noqa: BLE001 - one item must not kill the run
-                item_failed = True
-                failed += 1
-                message = f"{item.standard_no}: 详情抓取失败: {exc}"
-                errors.append(message)
-                logger.warning("sync task %s %s", task.id, message)
+            if include_details:
+                try:
+                    detail = source.fetch_detail(item)
+                except Exception as exc:  # noqa: BLE001 - one item must not kill the run
+                    item_failed = True
+                    failed += 1
+                    message = f"{item.standard_no}: 详情抓取失败: {exc}"
+                    errors.append(message)
+                    logger.warning("sync task %s %s", task.id, message)
 
             try:
                 values = _build_values(item, detail, source_name)
                 standard = upsert_standard(db, values)
-                db.commit()
+                if include_details or total % CATALOG_COMMIT_BATCH_SIZE == 0:
+                    db.commit()
 
                 if detail is not None:
                     detailed_normalized.add(standard.normalized_no)
@@ -337,8 +350,8 @@ def execute_sync(
                                 relation_type=relation.relation_type,
                             )
                         )
-                    if not item_failed:
-                        success += 1
+                if not item_failed and (detail is not None or not include_details):
+                    success += 1
             except Exception as exc:  # noqa: BLE001 - isolate one bad row
                 db.rollback()
                 if not item_failed:
@@ -347,16 +360,26 @@ def execute_sync(
                 errors.append(message)
                 logger.warning("sync task %s %s", task.id, message)
             finally:
-                _persist_progress(
-                    db,
-                    task,
-                    total=total,
-                    success=success,
-                    failed=failed,
-                )
+                if include_details or total % CATALOG_COMMIT_BATCH_SIZE == 0:
+                    _persist_progress(
+                        db,
+                        task,
+                        total=total,
+                        success=success,
+                        failed=failed,
+                    )
     except Exception as exc:  # noqa: BLE001 - page/transport/database failure
         fatal_error = str(exc)
         logger.exception("sync task %s fatal error: %s", task.id, exc)
+
+    if not include_details:
+        _persist_progress(
+            db,
+            task,
+            total=total,
+            success=success,
+            failed=failed,
+        )
 
     relation_errors: list[str] = []
     if relation_specs:
@@ -465,6 +488,7 @@ def run_sync(
     mode: SyncMode = SyncMode.AUTO,
     settings: Settings | None = None,
     max_items: int | None = None,
+    include_details: bool = True,
 ) -> tuple[SyncTask, SyncMode]:
     """Synchronous entry point used by tests and command-line tooling."""
     settings = settings or get_settings()
@@ -477,6 +501,7 @@ def run_sync(
         resolved_mode,
         settings=settings,
         max_items=max_items,
+        include_details=include_details,
     )
     return task, resolved_mode
 

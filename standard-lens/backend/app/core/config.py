@@ -19,7 +19,7 @@ class Settings(BaseSettings):
 
     # Application
     app_name: str = "Standard Lens API"
-    app_version: str = "0.8.0"
+    app_version: str = "0.9.0"
     app_env: str = "development"
     debug: bool = True
     api_prefix: str = "/api"
@@ -59,6 +59,10 @@ class Settings(BaseSettings):
     sync_update_max_pages: int = 20
     sync_overlap_hours: int = 24
     sync_user_agent: str = "StandardLens/0.4"
+
+    # First startup: if the standard table is empty, import the bundled CSV.
+    standards_csv_bootstrap_enabled: bool = True
+    standards_csv_path: str | None = None
 
     # AI requests are user-supplied and only live for the request lifetime.
     ai_request_timeout_seconds: float = 20.0

@@ -19,6 +19,11 @@ const router = createRouter({
       component: () => import('@/views/ProductSearchView.vue'),
     },
     {
+      path: '/vision/verify',
+      name: 'vision-verify',
+      component: () => import('@/views/VisionVerifyView.vue'),
+    },
+    {
       path: '/standards/:id(\\d+)',
       name: 'standard-detail',
       component: () => import('@/views/StandardDetailView.vue'),

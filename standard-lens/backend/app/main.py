@@ -1,14 +1,20 @@
 import logging
 from contextlib import asynccontextmanager
+from pathlib import Path
 
 from fastapi import FastAPI, Request
 from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
+from starlette.concurrency import run_in_threadpool
 
 from app.api.router import api_router
-from app.core.config import get_settings
+from app.core.config import BACKEND_DIR, get_settings
 from app.db.session import SessionLocal, engine
+from app.services.standards_csv import (
+    DEFAULT_CSV_PATH,
+    seed_standards_from_csv,
+)
 from app.sync.scheduler import shutdown_scheduler, start_scheduler
 from app.sync.service import mark_stale_sync_tasks_failed
 
@@ -42,6 +48,26 @@ async def lifespan(_: FastAPI):
         finally:
             db.close()
 
+    if settings.standards_csv_bootstrap_enabled:
+        csv_path = DEFAULT_CSV_PATH
+        if settings.standards_csv_path:
+            configured = Path(settings.standards_csv_path)
+            csv_path = configured if configured.is_absolute() else BACKEND_DIR / configured
+        try:
+            seed = await run_in_threadpool(seed_standards_from_csv, csv_path)
+            if seed.status == "imported":
+                logger.info(
+                    "Standards catalog seeded from %s (%d rows)",
+                    seed.path,
+                    seed.imported,
+                )
+            elif seed.status == "missing":
+                logger.warning("Standards CSV bootstrap file not found: %s", seed.path)
+            else:
+                logger.info("Standards table not empty; CSV bootstrap skipped")
+        except Exception:  # noqa: BLE001 - bootstrap must not prevent API startup
+            logger.exception("Could not seed standards from CSV")
+
     if settings.sync_scheduler_enabled:
         try:
             start_scheduler(settings)
@@ -58,7 +84,7 @@ async def lifespan(_: FastAPI):
 app = FastAPI(
     title=settings.app_name,
     version=settings.app_version,
-    description="Standard Lens API - standards, versions, sync, products, AI settings, vision and standard matching (Phase 7)",
+    description="Standard Lens API - standards, versions, sync, products, AI settings, vision, matching and image-assisted verification (Phase 8)",
     lifespan=lifespan,
     docs_url="/docs",
     redoc_url=None,

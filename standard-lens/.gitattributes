@@ -7,3 +7,4 @@
 *.vue text eol=lf
 *.sql text eol=lf
 *.conf text eol=lf
+backend/data/*.csv -text

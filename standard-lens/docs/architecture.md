@@ -155,11 +155,13 @@ Phase 0 创建 `app_meta` 表，用于验证 ORM + 迁移链路；Phase 1 新增
 
 首次全量由管理员调用 `POST /api/admin/sync/standards` 触发；每日 APScheduler 任务只做增量，未初始化时跳过。这样避免服务首次启动时自动发起 8 万条级别的长任务。
 
+完整目录首次导入另提供 `scripts/sync_all_standards.py`，默认 `include_details=False`：只读列表页、批量 upsert 标准元数据，每 200 条提交一次；详情页和替代关系可通过 `--details` 分批补全。管理接口与定时任务仍走带详情的路径。
+
 ### 同步流程
 
 1. 创建 `sync_task`（RUNNING）
 2. 全量使用 `fetch_list()`；增量使用最后成功任务完成时间减去回看窗口
-3. 逐条拉取详情；详情失败时保留列表元数据并计入 `failed_count`
+3. 逐条拉取详情；`include_details=False` 的批量目录模式跳过这一步。详情失败时保留列表元数据并计入 `failed_count`
 4. 按 `normalized_no` upsert 标准
 5. 收集替代关系；关系目标不在本次窗口内时，额外拉取一次目标详情更新其状态/废止日期，再写 `standard_relation`
 6. 更新任务计数、状态、结束时间和错误摘要
@@ -178,6 +180,8 @@ Phase 0 创建 `app_meta` 表，用于验证 ORM + 迁移链路；Phase 1 新增
 ### 调度与并发
 
 - APScheduler `BackgroundScheduler` 在 FastAPI lifespan 内启动/停止
+- lifespan 在启动调度器之前检查 `standard` 表：为空时先用 `backend/data/standards.csv` 批量导入（单事务、1000 条一批），完成后再启动调度器；表非空时跳过
+- CSV 导入由 `STANDARDS_CSV_BOOTSTRAP_ENABLED` 控制，路径可用 `STANDARDS_CSV_PATH` 覆盖；导入失败只记录日志，不阻止 API 启动
 - 每日 `SYNC_SCHEDULE_HOUR:SYNC_SCHEDULE_MINUTE`（服务器本地时间）
 - 进程内 `threading.Lock` + `sync_task` RUNNING 检查防止并发
 - 服务重启时把遗留 RUNNING 任务标记 FAILED
@@ -263,7 +267,7 @@ Phase 0 创建 `app_meta` 表，用于验证 ORM + 迁移链路；Phase 1 新增
 - Anthropic：Messages API + base64 image block；根路径 Base URL 自动补 `/v1`，同时发送 `x-api-key` 与 Bearer 认证头
 - Gemini：generateContent + inline_data
 
-图片识别接口 `POST /api/v1/vision/analyze` 与识别结果匹配接口 `POST /api/v1/vision/analyze-and-match` 已实现；前端图片上传与结果展示页面尚未实现。OpenAI/Gemini 使用 models 接口测试连接；Anthropic 使用最小 Messages 请求，并兼容根路径 Base URL 与 Bearer Token 网关。
+图片识别接口 `POST /api/v1/vision/analyze`、识别结果匹配与图片辅助核验接口 `POST /api/v1/vision/analyze-and-match` 已实现，前端 `/vision/verify` 页面已接入。OpenAI/Gemini 使用 models 接口测试连接；Anthropic 使用最小 Messages 请求，并兼容根路径 Base URL 与 Bearer Token 网关。
 
 ### 安全处理
 
@@ -344,22 +348,57 @@ Prompt 明确禁止根据商品知识推测标准号；解析层的交叉校验�
 ### 错误处理
 
 - 图片与 AI 阶段沿用 `/vision/analyze` 的 413 / 415 / 422 / 502
-- 标准库查询失败返回 503；匹配过程异常返回 500，均不返回 SQL 或内部堆栈
+- 标准库查询失败返回 503；匹配或核验过程异常返回 500，均不返回 SQL 或内部堆栈
 - 响应和日志都不包含 API Key；`UploadFile` 在 `app/vision/service.py` 的 finally 中关闭
+
+## 图片标准辅助核验
+
+`app/services/requirement_verification_service.py` 在标准匹配完成后，对每个 `detectedStandards` 条目读取 `standard_requirement`，逐项生成核验结果。核验不写数据库，不保存图片，也不产生任何“完整符合标准”的结论。
+
+### 要求数据
+
+`standard_requirement` 字段：`id`、`standard_id`、`chapter`、`requirement_type`、`requirement_text`、`verification_method`。`standard_id` 删除时级联删除；要求按章节自然排序（`4.1` < `4.2` < `4.10`）。
+
+`requirement_type` 决定图片可以参与的程度：
+
+| 类型 | 处理 |
+| --- | --- |
+| `VISUAL` | AI 分析结果可辅助判断外观/结构信息；只有图片中有证据时才标为可见 |
+| `LABEL` | AI 分析结果可辅助判断标签、标准号、厂家、日期、材质等可见文字 |
+| `DOCUMENT` | 固定提示需要证书、检测报告或合规文件，不做图片判断 |
+| `LAB_TEST` | 固定返回“无法通过图片判断”，需要实验室检测 |
+| `MEASUREMENT` | 固定返回“无法判断”；有数值也只说明存在读数，不能确认测量条件与精度 |
+
+### 证据与状态
+
+证据来自已解析的 AI 结果：`product.name`、`product.categoryGuess`、`materials`、`usages`、`visibleText`、`visibleStandardNumbers`、`productionDate`、`manufacturer`。
+
+- 具体规则识别执行标准、生产厂家、生产日期/有效期、净含量/规格、地址、材质/成分、警示语、适用年龄等字段
+- 有完整证据：`OBSERVED`，前端显示 ✓
+- 只有部分证据或通用可见信息：`PARTIAL`，前端显示 ?
+- 有具体规则但图片中没找到：`NOT_OBSERVED`，前端显示 ?，并明确“照片未拍到不代表商品不符合”
+- 外部核验：`NEEDS_DOCUMENT` / `NOT_POSSIBLE` / `CANNOT_VERIFY`，`imageCheckable=false`
+- `VISUAL` / `LABEL` 要求文本中出现迁移量、重金属、微生物、菌落、甲醛释放、有害物质限量、检测方法等实验指标时，降级为 `CANNOT_VERIFY`，避免错误地用图片宣称达标
+
+所有 `VISUAL` / `LABEL` 的可见结论都带“仅代表图片可见内容，不代表商品满足该标准的全部要求”的边界说明。响应顶层 `verificationNotice` 固定为：
+
+> 图片分析只能辅助核对可见信息，不能替代实验检测、检测报告或合规认证。
+
+前端 `/vision/verify` 必须原样展示该声明；结果卡展示执行标准、当前状态、替代标准、逐项核验和 `summary`。
 
 ## 前端结构
 
 | 目录 | 职责 |
 | --- | --- |
-| `src/views/` | 页面（首页、标准详情页、商品搜索页、AI 设置页） |
+| `src/views/` | 页面（首页、标准详情页、商品搜索页、AI 设置页、图片辅助核验页） |
 | `src/components/ui/` | shadcn-vue 基础组件（Button、Card、Badge） |
-| `src/api/` | fetch 封装、标准接口、商品接口、AI 测试接口 |
-| `src/stores/` | Pinia 状态（健康检查、标准详情、商品搜索、AI 配置） |
+| `src/api/` | fetch 封装、标准接口、商品接口、AI 测试接口、图片核验接口 |
+| `src/stores/` | Pinia 状态（健康检查、标准详情、商品搜索、AI 配置、图片核验） |
 | `src/types/` | 与后端响应对应的类型 |
 | `src/lib/` | `cn()`、标准状态、商品分组、Provider 元数据 |
-| `src/router/` | 路由（`/`、`/standards/:id`、`/products`、`/settings/ai`） |
+| `src/router/` | 路由（`/`、`/standards/:id`、`/products`、`/settings/ai`、`/vision/verify`） |
 
-首页展示健康状态和功能状态；`/standards/:id` 展示标准详情与版本时间轴；`/products` 展示商品搜索和四组关联标准；`/settings/ai` 管理浏览器本地的 AI 配置。前端标准号检索页仍未实现。
+首页展示健康状态和功能状态；`/standards/:id` 展示标准详情与版本时间轴；`/products` 展示商品搜索和四组关联标准；`/settings/ai` 管理浏览器本地的 AI 配置；`/vision/verify` 上传图片并展示标准匹配与图片可检查项。前端标准号检索页仍未实现。
 
 ## PWA
 
@@ -378,9 +417,10 @@ Prompt 明确禁止根据商品知识推测标准号；解析层的交叉校验�
 | Phase 3 | `StandardDataSource`、std.samr 适配器、upsert、sync_task、管理员同步接口、每日增量任务 | 已完成 |
 | Phase 4 | 商品分类、别名、标准关联、商品搜索/分组标准 API、前端商品搜索页 | 已完成 |
 | Phase 5 | 用户 AI 配置、Provider 适配器、连接测试、AI 设置页 | 已完成 |
-| Phase 6 | 图片识别接口、图片压缩/内存处理、结构化 JSON、标准号防猜测 | 已完成（前端上传页未开放） |
-| Phase 7 | 图片标准号精确匹配、商品分类匹配、商品相关标准分组、旧标准替代链提示 | 已完成（前端结果页未开放） |
-| 后续 | 前端标准检索页、AI 图片上传/结果页、关联审核管理、同步任务管理页、全文检索 | 未开始 |
+| Phase 6 | 图片识别接口、图片压缩/内存处理、结构化 JSON、标准号防猜测 | 已完成 |
+| Phase 7 | 图片标准号精确匹配、商品分类匹配、商品相关标准分组、旧标准替代链提示 | 已完成 |
+| Phase 8 | `standard_requirement`、按类型分级核验、图片可见证据、前端核验页与边界声明 | 已完成 |
+| 后续 | 前端标准检索页、关联/核验要求管理、同步任务管理页、全文检索 | 未开始 |
 | 后续 | 历史记录、收藏、权限与运维增强 | 未开始 |
 
 后续阶段新增业务表时，从 `app/models/` 和 Alembic 迁移开始，而不是直接改数据库。

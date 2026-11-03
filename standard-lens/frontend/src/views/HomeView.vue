@@ -133,9 +133,9 @@ const roadmap = [
     icon: Sparkles,
   },
   {
-    title: 'AI 图片识别',
-    description: '识别接口已接入；前端上传与结果展示页面待开发。',
-    badge: '接口就绪',
+    title: 'AI 图片辅助核验',
+    description: '上传商品包装照片，识别执行标准，按标准要求核验图片可见信息。',
+    badge: '已接入',
     ready: true,
     icon: Camera,
   },
@@ -173,6 +173,14 @@ onMounted(() => {
           <span class="hidden sm:inline">商品查询</span>
         </RouterLink>
         <RouterLink
+          to="/vision/verify"
+          aria-label="图片核验"
+          class="inline-flex h-8 items-center gap-1.5 rounded-md px-2 text-sm text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
+        >
+          <Camera class="h-4 w-4" />
+          <span class="hidden sm:inline">图片核验</span>
+        </RouterLink>
+        <RouterLink
           to="/settings/ai"
           aria-label="AI 设置"
           class="inline-flex h-8 items-center gap-1.5 rounded-md px-2 text-sm text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
@@ -180,15 +188,15 @@ onMounted(() => {
           <Sparkles class="h-4 w-4" />
           <span class="hidden sm:inline">AI 设置</span>
         </RouterLink>
-        <Badge variant="outline" class="bg-background/70 text-[11px] backdrop-blur">Phase 7</Badge>
+        <Badge variant="outline" class="bg-background/70 text-[11px] backdrop-blur">Phase 8</Badge>
       </div>
     </header>
 
     <main class="mx-auto w-full max-w-3xl px-5 pb-16 pt-8">
       <section class="space-y-3">
-        <h1 class="text-2xl font-semibold tracking-tight sm:text-3xl">商品标准查询与 AI 图片识别</h1>
+        <h1 class="text-2xl font-semibold tracking-tight sm:text-3xl">商品标准查询与 AI 图片辅助核验</h1>
         <p class="text-sm leading-relaxed text-muted-foreground sm:text-base">
-          标准同步、版本链、商品查询与 AI 设置已接入；图片识别接口已就绪，上传页面待开发。
+          标准同步、版本链、商品查询、AI 设置与图片辅助核验已接入；图片结果只核对可见信息，不构成完整合规结论。
         </p>
       </section>
 

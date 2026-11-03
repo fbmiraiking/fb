@@ -8,6 +8,7 @@ from app.models.product import (
     StandardProductRelation,
     StandardProductRelationType,
 )
+from app.models.requirement import RequirementType, StandardRequirement
 from app.models.standard import Standard, StandardStatus
 from app.models.standard_relation import StandardRelation, StandardRelationType
 from app.utils.standard_no import StandardNoNormalizer
@@ -83,4 +84,20 @@ def make_product_relation(
         source_type=source_type,
         source_reference=source_reference,
         review_status=review_status,
+    )
+
+
+def make_requirement(
+    standard_id: int,
+    chapter: str = "4.1",
+    requirement_type: RequirementType = RequirementType.LABEL,
+    requirement_text: str = "包装上应标注执行标准。",
+    verification_method: str = "查看包装标签。",
+) -> StandardRequirement:
+    return StandardRequirement(
+        standard_id=standard_id,
+        chapter=chapter,
+        requirement_type=requirement_type,
+        requirement_text=requirement_text,
+        verification_method=verification_method,
     )

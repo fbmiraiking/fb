@@ -2,7 +2,7 @@
 
 商品标准查询与 AI 图片识别 Web 应用。
 
-当前仓库完成 **Phase 0：项目骨架**、**Phase 1：标准基础数据模型和查询 API**、**Phase 2：标准版本关系、版本链 API 和前端详情页**、**Phase 3：标准数据同步模块**、**Phase 4：商品分类与标准关联**、**Phase 5：用户自备 AI Key 与 Provider 接口**、**Phase 6：图片识别接口**，以及 **Phase 7：识别结果与标准库、商品分类匹配**。
+当前仓库完成 **Phase 0：项目骨架**、**Phase 1：标准基础数据模型和查询 API**、**Phase 2：标准版本关系、版本链 API 和前端详情页**、**Phase 3：标准数据同步模块**、**Phase 4：商品分类与标准关联**、**Phase 5：用户自备 AI Key 与 Provider 接口**、**Phase 6：图片识别接口**、**Phase 7：识别结果与标准库、商品分类匹配**，以及 **Phase 8：图片标准辅助核验**。
 
 ## 当前范围
 
@@ -23,8 +23,10 @@
 - Phase 5：用户自备 AI Provider 配置、sessionStorage/localStorage 本地保存、测试连接接口、统一 `VisionProvider` 与四类适配器
 - Phase 6：`POST /api/v1/vision/analyze` 图片识别、10MB/JPEG/PNG/WebP 限制、2048px 内存压缩、严格 JSON 解析与标准号防猜测校验
 - Phase 7：`POST /api/v1/vision/analyze-and-match` 识别结果与标准库/商品分类匹配、旧标准替代链提示、按状态分组排序
+- Phase 8：`standard_requirement` 核验要求表、VISUAL/LABEL/DOCUMENT/LAB_TEST/MEASUREMENT 分级核验、图片辅助核验前端页、结果边界声明
+- 离线标准目录：`backend/data/standards.csv`，后端首次启动且 `standard` 表为空时自动导入，之后再由定时任务增量更新
 
-**当前未实现**：前端标准检索页、AI 图片上传/结果展示页面（后端识别与标准库匹配接口已完成）。商品和标准关联数据目前通过 SQL/后续管理端维护。
+**当前未实现**：前端标准检索页（标准详情、商品搜索、AI 设置、图片辅助核验页已完成）。商品分类关联和标准核验要求目前通过 SQL/后续管理端维护。
 
 ## 技术栈
 
@@ -65,6 +67,7 @@ standard-lens/
       models/standard.py       # standard 表与状态枚举
       models/standard_relation.py  # 标准版本/关联关系
       models/product.py        # 商品分类、别名、标准关联
+      models/requirement.py    # 标准核验要求与类型枚举
       models/sync_task.py      # 同步任务日志
       schemas/standard.py      # 标准 API 响应模型
       schemas/product.py       # 商品 API 响应模型
@@ -75,6 +78,7 @@ standard-lens/
       services/standard_service.py
       services/product_service.py
       services/vision_match_service.py  # 标准号/商品分类匹配、旧标准提示、分组排序
+      services/requirement_verification_service.py  # 按类型核验图片可见信息
       sync/base.py             # StandardDataSource 接口与 DTO
       sync/std_samr.py         # std.samr.gov.cn 适配器
       sync/upsert.py           # 标准/关系 upsert
@@ -89,7 +93,12 @@ standard-lens/
       versions/20261103_0003_create_standard_relation_table.py
       versions/20261103_0004_create_sync_task_table.py
       versions/20261103_0005_create_product_tables.py
+      versions/20261103_0006_create_standard_requirement_table.py
     scripts/init_db.py         # 验证 / 创建数据库
+    scripts/sync_all_standards.py    # 全量目录抓取
+    scripts/export_standards_csv.py  # 导出标准目录 CSV
+    scripts/import_standards_csv.py  # 导入标准目录 CSV
+    data/standards.csv         # 首次启动的离线标准目录
     tests/                     # pytest 单元与接口测试（含数据源 fixtures）
     alembic.ini
     requirements.txt
@@ -102,6 +111,7 @@ standard-lens/
       api/standards.ts         # 标准详情 / 版本链接口
       api/products.ts          # 商品搜索 / 关联标准接口
       api/ai.ts                # AI 连接测试接口
+      api/vision.ts            # 图片识别 + 标准辅助核验接口
       lib/standard-status.ts   # 标准状态标签与日期格式
       lib/product.ts           # 商品分组/关系类型标签
       lib/ai.ts                # Provider 元数据与本地存储键
@@ -109,13 +119,16 @@ standard-lens/
       stores/standardDetail.ts # 标准详情与版本链状态
       stores/products.ts       # 商品搜索与分组标准状态
       stores/aiSettings.ts     # AI 配置、本地存储、测试连接
+      stores/visionVerify.ts   # 图片选择、识别核验状态
       types/standard.ts
       types/product.ts
       types/ai.ts
+      types/vision.ts
       views/HomeView.vue       # 首页
       views/StandardDetailView.vue  # /standards/:id 详情与时间轴
       views/ProductSearchView.vue   # /products 商品搜索与分组标准
       views/AISettingsView.vue      # /settings/ai AI 设置
+      views/VisionVerifyView.vue    # /vision/verify 图片标准辅助核验
       components/ui/           # shadcn-vue 基础组件
       router/
     public/icons/              # PWA 图标
@@ -281,6 +294,8 @@ npm run dev
 | `SYNC_UPDATE_MAX_PAGES` | 增量同步最多扫描页数 | `20` |
 | `SYNC_OVERLAP_HOURS` | 增量同步回看小时数 | `24` |
 | `SYNC_USER_AGENT` | 请求 User-Agent | `StandardLens/0.4` |
+| `STANDARDS_CSV_BOOTSTRAP_ENABLED` | 标准表为空时，启动阶段自动导入 `backend/data/standards.csv` | `true` |
+| `STANDARDS_CSV_PATH` | 可选，覆盖 CSV 路径 | `backend/data/standards.csv` |
 | `AI_REQUEST_TIMEOUT_SECONDS` | 用户 AI 请求超时秒数 | `20` |
 
 前端配置来自 `frontend/.env`：
@@ -304,7 +319,7 @@ npm run dev
 {
   "status": "ok",
   "service": "Standard Lens API",
-  "version": "0.8.0",
+  "version": "0.9.0",
   "environment": "development",
   "database": {
     "status": "ok",
@@ -533,6 +548,41 @@ curl --get --data-urlencode "q=食品接触" "http://127.0.0.1:8000/api/v1/stand
 `review_status`：`PENDING`、`APPROVED`、`REJECTED`。公开接口排除 `REJECTED`，保留 `PENDING` 并在响应中带上 `reviewStatus`，方便前端显示“待审核”。
 
 `confidence` 为 0–1 的小数，可为空。`source_type` 目前可用 `MANUAL`、`OFFICIAL` 等字符串；`source_reference` 保存来源链接或说明。
+
+### 标准核验要求
+
+`standard_requirement` 保存从标准中拆出的可核验要求：
+
+| 字段 | 说明 |
+| --- | --- |
+| `id` | 主键 |
+| `standard_id` | 关联 `standard.id`，删除标准时级联删除 |
+| `chapter` | 章节号或条款号，例如 `4.1`、`5.2.3` |
+| `requirement_type` | `VISUAL` / `LABEL` / `DOCUMENT` / `LAB_TEST` / `MEASUREMENT` |
+| `requirement_text` | 要求原文或摘要 |
+| `verification_method` | 建议核验方式，例如“查看包装标签”“按标准方法测量” |
+
+图片核验边界：
+
+| 类型 | 图片可以做什么 |
+| --- | --- |
+| `VISUAL` | 允许 AI 辅助判断图片中可见的外观/结构信息；只能说明“图片中可见”，不能判定完整符合 |
+| `LABEL` | 允许 AI 辅助判断标签、标准号、厂家、日期、材质等可见文字 |
+| `DOCUMENT` | 只提示需要证书、检测报告或合规文件，不判断是否已具备 |
+| `LAB_TEST` | 明确显示“无法通过图片判断”，需要实验室检测 |
+| `MEASUREMENT` | 没有可靠测量信息时显示“无法判断”；照片中的数值不能替代规范测量 |
+
+要求数据目前通过 SQL 或后续管理端维护。示例：
+
+```sql
+INSERT INTO standard_requirement (
+    standard_id, chapter, requirement_type, requirement_text, verification_method
+) VALUES
+(1, '4.1', 'LABEL', '包装上应标注执行标准号。', '查看包装标签'),
+(1, '4.2', 'VISUAL', '产品外观应清洁、无破损。', '目视检查，仅记录图片可见信息'),
+(1, '5.1', 'LAB_TEST', '材料迁移量应符合限量要求。', '按标准方法进行实验室检测'),
+(1, '5.2', 'DOCUMENT', '应提供符合性声明或检测报告。', '查验相关文件');
+```
 
 ### `GET /api/v1/products/search?q=`
 
@@ -792,7 +842,65 @@ curl --get --data-urlencode "q=食品接触" "http://127.0.0.1:8000/api/v1/stand
       "matchedTerms": ["婴儿塑料奶瓶", "婴儿奶瓶"]
     }
   ],
-  "unmatchedVisibleStandardNumbers": []
+  "unmatchedVisibleStandardNumbers": [],
+  "standardVerification": [
+    {
+      "standardId": 12,
+      "standardNo": "GB 1000-2018",
+      "standardName": "旧版塑料奶瓶标准",
+      "status": "REPLACED",
+      "statusLabel": "旧标准",
+      "effectiveDate": "2018-07-01",
+      "replacementStandards": [
+        {
+          "id": 13,
+          "standardNo": "GB 1000-2024",
+          "standardName": "现行塑料奶瓶标准",
+          "status": "ACTIVE",
+          "statusLabel": "当前现行",
+          "publishDate": "2024-01-01",
+          "effectiveDate": "2024-05-01",
+          "expiryDate": null,
+          "relationType": "REPLACES",
+          "isHistorical": false
+        }
+      ],
+      "latestCurrent": [],
+      "lifecycleNotice": "图片上的标准 GB 1000-2018 是旧标准……",
+      "requirements": [
+        {
+          "requirementId": 1,
+          "chapter": "4.1",
+          "requirementType": "LABEL",
+          "requirementText": "包装上应标注执行标准号。",
+          "verificationMethod": "查看包装标签",
+          "status": "OBSERVED",
+          "statusLabel": "图片中可见",
+          "imageCheckable": true,
+          "evidence": ["可见标准号：GB 1000-2018"],
+          "message": "AI 辅助：图片中可见上述信息；仅代表图片可见内容，不代表商品满足该标准的全部要求。"
+        },
+        {
+          "requirementId": 2,
+          "chapter": "5.1",
+          "requirementType": "LAB_TEST",
+          "requirementText": "材料迁移量应符合限量要求。",
+          "verificationMethod": "按标准方法进行实验室检测",
+          "status": "NOT_POSSIBLE",
+          "statusLabel": "无法通过图片判断",
+          "imageCheckable": false,
+          "evidence": [],
+          "message": "无法通过图片判断，需要按标准方法进行实验室检测。"
+        }
+      ],
+      "observedCount": 1,
+      "partialCount": 0,
+      "notObservedCount": 0,
+      "externalCheckCount": 1,
+      "summary": "图片可核对 2 项要求：1 项在图片中可见，1 项需证书、实验或测量。"
+    }
+  ],
+  "verificationNotice": "图片分析只能辅助核对可见信息，不能替代实验检测、检测报告或合规认证。"
 }
 ```
 
@@ -805,9 +913,14 @@ curl --get --data-urlencode "q=食品接触" "http://127.0.0.1:8000/api/v1/stand
 - `relatedStandards.current` 按 `effectiveDate` 从新到旧；`upcoming` 从近到远；`historical` 从新到旧；`other` 包含 `POSSIBLE` 关联或状态未知的标准
 - `relationType`：`DETECTED` / `REPLACES` / `LATEST_CURRENT`，商品关联时为 `DIRECT_APPLICABLE`、`MATERIAL`、`SAFETY` 等
 - `unmatchedVisibleStandardNumbers`：AI 看到但数据库没有的标准号；它们**不会**被补全或生成标准条目
+- `standardVerification`：对每个检测标准读取 `standard_requirement` 并逐项核验；`requirements` 按章节自然排序
+- `status` 取值：`OBSERVED`（图片中可见）、`PARTIAL`（部分可见，需人工核对）、`NOT_OBSERVED`（图片中未观察到）、`NEEDS_DOCUMENT`（需要证书/文档）、`NOT_POSSIBLE`（无法通过图片判断）、`CANNOT_VERIFY`（无法判断）
+- 只有 `VISUAL` / `LABEL` 项会因图片证据标为 `OBSERVED` / `PARTIAL`；`DOCUMENT` / `LAB_TEST` / `MEASUREMENT` 的 `imageCheckable` 为 `false`
+- `replacementStandards` 是直接替代标准；`latestCurrent` 是版本链中的现行标准；旧标准组同时保留 `lifecycleNotice`
+- `verificationNotice` 固定返回核验边界声明；前端必须原样展示，不能用图片结果宣称商品完整符合标准
 - 所有最终标准都来自数据库；AI 只负责从图片提取文本，不生成标准编号
 - `imageStored` 固定为 `false`
-- 503：标准库查询失败；500：识别成功但匹配过程失败
+- 503：标准库查询失败；500：识别成功但匹配或核验过程失败
 
 ### `POST /api/admin/sync/standards`（管理员）
 
@@ -936,6 +1049,62 @@ INSERT INTO standard_product_relation (
 - 每日定时任务在尚未完成首次初始化时不会自动跑全量，而是跳过并记录警告；先手动完成初始化
 - 增量扫描最多 `SYNC_UPDATE_MAX_PAGES` 页，默认 20
 
+### 批量目录同步（推荐首次使用）
+
+完整目录约 8 万条。逐条抓详情页会持续很多小时，因此提供目录批量脚本：
+
+```bash
+cd backend
+.venv/Scripts/python -m scripts.sync_all_standards
+```
+
+默认只读取列表页并 upsert 标准元数据，不抓详情页；每 200 条批量提交一次。已存在的标准会保留详情页补充的可选字段。预计约 30 分钟（1 秒/请求限速）。
+
+需要同时补全废止日期和替代关系时：
+
+```bash
+.venv/Scripts/python -m scripts.sync_all_standards --details
+```
+
+`--details` 会为每条标准抓一次详情页，8 万条约需十几小时，适合分批执行：
+
+```bash
+.venv/Scripts/python -m scripts.sync_all_standards --details --limit 1000
+```
+
+`--interval` 可调整请求间隔，`--limit` 可限制本次条数。脚本会创建正常的 `sync_task` 记录，可通过任务 ID 查看进度。
+
+### 离线 CSV 初始化
+
+仓库内置一份标准目录 CSV：`backend/data/standards.csv`，用于新环境第一次启动时快速建立标准库，避免每位开发者都重新抓取数万条数据。
+
+启动顺序：
+
+1. 后端启动时检查 `standard` 表
+2. 表为空：在导入 CSV 完成前不启动定时同步
+3. 表非空：跳过 CSV，直接使用现有数据
+4. CSV 导入完成后，再启动每日增量同步
+
+配置：
+
+- `STANDARDS_CSV_BOOTSTRAP_ENABLED=true`
+- `STANDARDS_CSV_PATH` 可选，默认 `backend/data/standards.csv`
+
+手工导出/导入：
+
+```bash
+cd backend
+# 导出当前数据库全部标准
+.venv/Scripts/python -m scripts.export_standards_csv
+
+# 手工导入（幂等 upsert，按 normalized_no）
+.venv/Scripts/python -m scripts.import_standards_csv
+```
+
+CSV 列为：`standard_no`、`normalized_no`、`standard_name`、`standard_type`、`status`、`publish_date`、`effective_date`、`expiry_date`、`standard_year`、`scope`、`source`、`source_url`。
+
+CSV 只包含标准元数据，不包含条款正文、商品分类、商品关联或版本关系。版本关系仍通过详情同步补齐。
+
 ### 限速、重试与超时
 
 - `SYNC_REQUEST_INTERVAL_SECONDS` 默认 1 秒/请求
@@ -943,7 +1112,7 @@ INSERT INTO standard_product_relation (
 - `SYNC_MAX_RETRIES` 默认 3 次（指数退避）
 - 对 429、500、502、503、504、超时和传输错误重试；4xx（除 429）不重试
 
-全量目录约 8 万条标准，按 1 秒/请求计算会持续很久。建议先设置 `SYNC_MAX_ITEMS_PER_RUN=50` 做小规模验证，确认数据无误后再设为 `0`（不限条数）执行完整初始化，并安排在非高峰时段。
+全量目录约 8 万条标准。管理接口的全量模式会逐条抓详情页，按 1 秒/请求计算会持续很久；首次初始化优先使用上面的 `scripts.sync_all_standards` 目录批量脚本，之后再按需分批补详情和关系。也可以先设置 `SYNC_MAX_ITEMS_PER_RUN=50` 做小规模验证。
 
 ### 写入与关系
 
@@ -1051,6 +1220,17 @@ class VisionProvider:
 - 保存/清除本地配置
 - 页面明确提示 Key 不会保存到后端
 
+### 图片辅助核验页
+
+访问 `/vision/verify`（首页右上角“图片核验”入口）：
+
+- 选择 JPEG/PNG/WebP 图片，最大 10MB；本地预览，不上传原图到持久存储
+- 未配置 AI Provider 时引导到 `/settings/ai`
+- 上传后调用 `POST /api/v1/vision/analyze-and-match`
+- 按检测到的标准显示：包装执行标准、当前状态、当前替代标准、图片可检查项
+- `OBSERVED` 使用 ✓ 图标，其余显示为 ? 并说明原因（部分可见、需文档、需实验、无法测量）
+- 页面底部固定显示：“图片分析只能辅助核对可见信息，不能替代实验检测、检测报告或合规认证。”
+
 ## 图片识别
 
 ### 处理流程
@@ -1093,7 +1273,7 @@ Prompt 明确要求 `visibleStandardNumbers` 只能来自图片中清晰可见�
 
 ### 前端
 
-本阶段只完成后端识别接口。AI 配置页已存在，图片上传与结构化结果展示页面尚未实现。
+`/vision/verify` 已提供图片选择、AI 配置检查、识别/匹配结果和逐项核验展示；`/analyze` 仍只返回结构化识别结果，`/analyze-and-match` 额外返回标准匹配与 `standardVerification`。
 
 ## 测试与构建
 
@@ -1209,10 +1389,10 @@ Service Worker 只在 `npm run build` 后生效；除 `localhost` 外，PWA 安�
 ## 下一阶段
 
 - 前端标准检索页（商品搜索页、标准详情页已完成）
-- 商品分类与标准关联的管理/审核页面
+- 商品分类关联与标准核验要求的管理/审核页面
 - 同步任务管理页、失败明细与重试队列
 - 分类、关键词与全文检索优化
-- AI 图片上传/结果展示页面，以及识别结果与标准库比对（后端识别接口已完成）
+- 标准核验要求的批量导入与原文对照
 - 收藏/历史记录、部署优化与权限
 
 这些功能在当前代码中尚未实现。

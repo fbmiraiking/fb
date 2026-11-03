@@ -82,6 +82,7 @@ class FakeSource(StandardDataSource):
         self.updates: list[StandardListItem] = []
         self.list_calls = 0
         self.update_calls: list[datetime] = []
+        self.detail_calls: list[str] = []
         self.fail_detail_for: set[str] = set()
         self.fail_list = False
 
@@ -95,6 +96,7 @@ class FakeSource(StandardDataSource):
         yield from self.items
 
     def fetch_detail(self, item: StandardListItem) -> StandardDetailData:
+        self.detail_calls.append(item.standard_no)
         if item.standard_no in self.fail_detail_for:
             raise DataSourceError("detail failed")
         return self.details[item.standard_no]
@@ -154,6 +156,30 @@ def test_first_sync_is_full_upserts_and_writes_relations(db_session: Session) ->
     assert len(relations) == 1
     assert relations[0].source_standard_id == current_row.id
     assert relations[0].relation_type is StandardRelationType.REPLACES
+
+
+def test_catalog_only_sync_skips_detail_requests(db_session: Session) -> None:
+    first = make_item("GB 7000-2024", "列表标准 A")
+    second = make_item("GB 7001-2024", "列表标准 B")
+    source = FakeSource([first, second], {})
+
+    task, mode = run_sync(
+        db_session,
+        source,
+        settings=make_settings(),
+        include_details=False,
+    )
+
+    assert mode is SyncMode.FULL
+    assert source.detail_calls == []
+    assert task.status is SyncTaskStatus.SUCCESS
+    assert (task.total_count, task.success_count, task.failed_count) == (2, 2, 0)
+    assert db_session.scalar(select(func.count()).select_from(Standard)) == 2
+    row = db_session.scalar(
+        select(Standard).where(Standard.normalized_no == "GB 7001-2024")
+    )
+    assert row is not None
+    assert row.standard_name == "列表标准 B"
 
 
 def test_second_sync_is_incremental_and_updates_existing_row(db_session: Session) -> None:

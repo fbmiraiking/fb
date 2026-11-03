@@ -9,12 +9,14 @@ from PIL import Image
 
 from app.ai.types import VisionAnalysisResult
 from app.models.product import StandardProductRelationType
+from app.models.requirement import RequirementType
 from app.models.standard import StandardStatus
 from app.vision import service as vision_service
 from tests.factories import (
     make_category,
     make_product_relation,
     make_relation,
+    make_requirement,
     make_standard,
 )
 
@@ -105,6 +107,42 @@ def _seed(client_db) -> None:
     )
     client_db.commit()
 
+    client_db.add_all(
+        [
+            make_requirement(
+                old.id,
+                "4.1",
+                RequirementType.LABEL,
+                "包装上应标注执行标准号。",
+            ),
+            make_requirement(
+                old.id,
+                "4.2",
+                RequirementType.LABEL,
+                "包装上应标注生产厂家名称。",
+            ),
+            make_requirement(
+                old.id,
+                "4.3",
+                RequirementType.VISUAL,
+                "产品外观应清洁、无破损。",
+            ),
+            make_requirement(
+                old.id,
+                "5.1",
+                RequirementType.LAB_TEST,
+                "材料迁移量应符合限量要求。",
+            ),
+            make_requirement(
+                old.id,
+                "5.2",
+                RequirementType.DOCUMENT,
+                "应提供符合性声明或检测报告。",
+            ),
+        ]
+    )
+    client_db.commit()
+
 
 def test_vision_analyze_and_match_returns_db_standards(
     client: TestClient,
@@ -179,6 +217,38 @@ def test_vision_analyze_and_match_returns_db_standards(
         assert required <= set(item)
         assert item["relationType"] == "DIRECT_APPLICABLE"
         assert item["isHistorical"] is False
+
+    verification = body["standardVerification"]
+    assert len(verification) == 1
+    group = verification[0]
+    assert group["standardNo"] == "GB 1000-2018"
+    assert group["statusLabel"] == "旧标准"
+    assert group["replacementStandards"][0]["standardNo"] == "GB 1000-2024"
+    assert [item["chapter"] for item in group["requirements"]] == [
+        "4.1",
+        "4.2",
+        "4.3",
+        "5.1",
+        "5.2",
+    ]
+    assert [item["status"] for item in group["requirements"]] == [
+        "OBSERVED",
+        "OBSERVED",
+        "PARTIAL",
+        "NOT_POSSIBLE",
+        "NEEDS_DOCUMENT",
+    ]
+    assert group["observedCount"] == 2
+    assert group["partialCount"] == 1
+    assert group["externalCheckCount"] == 2
+    assert group["requirements"][0]["imageCheckable"] is True
+    assert group["requirements"][3]["imageCheckable"] is False
+    assert group["requirements"][3]["statusLabel"] == "无法通过图片判断"
+    assert group["requirements"][4]["statusLabel"] == "需要证书或文档"
+    assert (
+        body["verificationNotice"]
+        == "图片分析只能辅助核对可见信息，不能替代实验检测、检测报告或合规认证。"
+    )
 
     serialized = response.text
     assert "GB 8888-2099" not in {

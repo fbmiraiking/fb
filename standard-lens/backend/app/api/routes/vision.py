@@ -15,8 +15,15 @@ from app.schemas.vision_match import (
     DetectedStandardItem,
     MatchedCategoryItem,
     RelatedStandardsResponse,
+    RequirementCheckItem,
     StandardMatchItem,
+    StandardVerificationItem,
     VisionMatchResponse,
+)
+from app.services.requirement_verification_service import (
+    RequirementCheckResult,
+    StandardVerificationResult,
+    verify_detected_standards,
 )
 from app.services.vision_match_service import (
     DetectedStandardResult,
@@ -96,9 +103,55 @@ def _related_items(entries) -> list[StandardMatchItem]:
     ]
 
 
+def _to_requirement_item(result: RequirementCheckResult) -> RequirementCheckItem:
+    return RequirementCheckItem(
+        requirement_id=result.requirement.id,
+        chapter=result.requirement.chapter,
+        requirement_type=result.requirement.requirement_type,
+        requirement_text=result.requirement.requirement_text,
+        verification_method=result.requirement.verification_method,
+        status=result.status,
+        status_label=result.status_label,
+        image_checkable=result.image_checkable,
+        evidence=result.evidence,
+        message=result.message,
+    )
+
+
+def _to_verification_item(
+    result: StandardVerificationResult,
+) -> StandardVerificationItem:
+    return StandardVerificationItem(
+        standard_id=result.standard.id,
+        standard_no=result.standard.standard_no,
+        standard_name=result.standard.standard_name,
+        status=result.standard.status,
+        status_label=status_label(result.standard.status),
+        effective_date=result.standard.effective_date,
+        replacement_standards=[
+            _to_standard_item(standard, "REPLACES")
+            for standard in result.replacement_standards
+        ],
+        latest_current=[
+            _to_standard_item(standard, "LATEST_CURRENT")
+            for standard in result.latest_current
+        ],
+        lifecycle_notice=result.lifecycle_notice,
+        requirements=[
+            _to_requirement_item(item) for item in result.requirements
+        ],
+        observed_count=result.observed_count,
+        partial_count=result.partial_count,
+        not_observed_count=result.not_observed_count,
+        external_check_count=result.external_check_count,
+        summary=result.summary,
+    )
+
+
 def _to_match_response(
     analysis: VisionAnalysisResponse,
     result: VisionMatchResult,
+    verification: list[StandardVerificationResult],
 ) -> VisionMatchResponse:
     return VisionMatchResponse(
         image_analysis=analysis,
@@ -127,6 +180,9 @@ def _to_match_response(
             for item in result.matched_categories
         ],
         unmatched_visible_standard_numbers=result.unmatched,
+        standard_verification=[
+            _to_verification_item(item) for item in verification
+        ],
     )
 
 
@@ -186,7 +242,10 @@ async def analyze_image(
     summary="识别图片并与标准库、商品分类匹配",
     description=(
         "先使用用户 AI 配置识别图片，再用图片中的标准号、商品名、类别、材质和用途"
-        "匹配标准库与商品分类。所有最终标准均来自数据库。"
+        "匹配标准库与商品分类。检测到的标准会按 standard_requirement 做图片辅助核验："
+        "只有 VISUAL / LABEL 项允许 AI 辅助，DOCUMENT / LAB_TEST / MEASUREMENT "
+        "只提示需要证书、实验或可靠测量。所有最终标准均来自数据库，"
+        "图片结果不构成完整合规结论。"
     ),
 )
 async def analyze_and_match(
@@ -230,6 +289,7 @@ async def analyze_and_match(
 
     try:
         result = match_vision(db, analysis)
+        verification = verify_detected_standards(db, analysis, result.detected)
     except SQLAlchemyError as exc:
         raise HTTPException(
             status_code=503,
@@ -241,4 +301,4 @@ async def analyze_and_match(
             detail="识别结果匹配失败",
         ) from None
 
-    return _to_match_response(analysis, result)
+    return _to_match_response(analysis, result, verification)

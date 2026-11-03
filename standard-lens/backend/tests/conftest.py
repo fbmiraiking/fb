@@ -12,6 +12,7 @@ from sqlalchemy.pool import StaticPool
 os.environ["SYNC_SCHEDULER_ENABLED"] = "false"
 os.environ["SYNC_RECOVER_STALE_TASKS"] = "false"
 os.environ["ADMIN_SYNC_TOKEN"] = "test-admin-token"
+os.environ["STANDARDS_CSV_BOOTSTRAP_ENABLED"] = "false"
 
 import app.models  # noqa: E402,F401 - registers all ORM models
 from app.db.base import Base  # noqa: E402
